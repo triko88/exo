@@ -7,6 +7,7 @@ from loguru import logger
 
 from exo.master.placement_utils import (
     filter_cycles_by_memory,
+    get_hosts_from_subgraph,
     get_mlx_ibv_devices_matrix,
     get_mlx_jaccl_coordinators,
     get_mlx_ring_hosts_by_node,
@@ -19,6 +20,7 @@ from exo.shared.types.commands import (
     DeleteInstance,
     PlaceInstance,
 )
+from exo.shared.types.common import Host
 from exo.shared.types.events import Event, InstanceCreated, InstanceDeleted
 from exo.shared.types.memory import Memory
 from exo.shared.types.models import ModelId
@@ -29,6 +31,7 @@ from exo.shared.types.worker.instances import (
     InstanceMeta,
     MlxJacclInstance,
     MlxRingInstance,
+    TinygradCPUInstance,
 )
 from exo.shared.types.worker.shards import Sharding
 
@@ -136,6 +139,19 @@ def place_instance(
 
     # TODO: Single node instances
     match command.instance_meta:
+        case InstanceMeta.TinygradCPU:
+            hosts: list[Host] = get_hosts_from_subgraph(cycle_digraph)
+            target_instances[instance_id] = TinygradCPUInstance(
+                instance_id=instance_id,
+                shard_assignments=shard_assignments,
+                hosts=[
+                    Host(
+                        ip=host.ip,
+                        port=random_ephemeral_port(),
+                    )
+                    for host in hosts
+                ],
+            )
         case InstanceMeta.MlxJaccl:
             mlx_ibv_devices = get_mlx_ibv_devices_matrix(
                 selected_cycle,

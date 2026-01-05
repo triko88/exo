@@ -1,3 +1,4 @@
+import platform
 import time
 
 from exo.shared.types.api import ChatCompletionMessageText
@@ -18,7 +19,7 @@ from exo.shared.types.tasks import (
     Task,
     TaskStatus,
 )
-from exo.shared.types.worker.instances import BoundInstance
+from exo.shared.types.worker.instances import BoundInstance, TinygradCPUInstance
 from exo.shared.types.worker.runner_response import (
     GenerationResponse,
 )
@@ -44,6 +45,10 @@ from exo.worker.engines.mlx.utils_mlx import (
     mlx_force_oom,
 )
 from exo.worker.runner.bootstrap import logger
+
+if platform.system() != "Darwin":
+    from exo.worker.engines.tinygrad_cpu.generator.generate import tinygrad_generate
+    from exo.worker.engines.tinygrad_cpu.utils_tinygrad import initialize_tinygrad_cpu
 
 
 def main(
@@ -112,9 +117,15 @@ def main(
                             )
                         )
 
-                        model, tokenizer, sampler = load_mlx_items(
-                            bound_instance, group
-                        )
+                        match bound_instance.instance:
+                            case TinygradCPUInstance():
+                                model, tokenizer, sampler = initialize_tinygrad_cpu(
+                                    bound_instance
+                                )
+                            case _:
+                                model, tokenizer, sampler = load_mlx_items(
+                                    bound_instance, group
+                                )
 
                         current_status = RunnerLoaded()
                         logger.info("runner loaded")
@@ -161,29 +172,55 @@ def main(
                         _check_for_debug_prompts(task_params.messages[0].content)
 
                         # Generate responses using the actual MLX generation
-                        for response in mlx_generate(
-                            model=model,
-                            tokenizer=tokenizer,
-                            sampler=sampler,
-                            task=task_params,
-                        ):
-                            match response:
-                                case GenerationResponse():
-                                    if shard_metadata.device_rank == 0:
-                                        event_sender.send(
-                                            ChunkGenerated(
-                                                command_id=command_id,
-                                                chunk=TokenChunk(
-                                                    idx=response.token,
-                                                    model=shard_metadata.model_meta.model_id,
-                                                    text=response.text,
-                                                    token_id=response.token,
-                                                    finish_reason=response.finish_reason,
-                                                ),
-                                            )
-                                        )
-                                    # case TokenizedResponse():
-                                    # TODO: something here ig
+                        match bound_instance.instance:
+                            case TinygradCPUInstance():
+                                for response in tinygrad_generate(
+                                    model=model,
+                                    tokenizer=tokenizer,
+                                    sampler=sampler,
+                                    task=task_params,
+                                ):
+                                    match response:
+                                        case GenerationResponse():
+                                            if shard_metadata.device_rank == 0:
+                                                event_sender.send(
+                                                    ChunkGenerated(
+                                                        command_id=command_id,
+                                                        chunk=TokenChunk(
+                                                            idx=response.token,
+                                                            model=shard_metadata.model_meta.model_id,
+                                                            text=response.text,
+                                                            token_id=response.token,
+                                                            finish_reason=response.finish_reason,
+                                                        ),
+                                                    )
+                                                )
+                                            # case TokenizedResponse():
+                                            # TODO: something here ig
+                            case _:
+                                for response in mlx_generate(
+                                    model=model,
+                                    tokenizer=tokenizer,
+                                    sampler=sampler,
+                                    task=task_params,
+                                ):
+                                    match response:
+                                        case GenerationResponse():
+                                            if shard_metadata.device_rank == 0:
+                                                event_sender.send(
+                                                    ChunkGenerated(
+                                                        command_id=command_id,
+                                                        chunk=TokenChunk(
+                                                            idx=response.token,
+                                                            model=shard_metadata.model_meta.model_id,
+                                                            text=response.text,
+                                                            token_id=response.token,
+                                                            finish_reason=response.finish_reason,
+                                                        ),
+                                                    )
+                                                )
+                                            # case TokenizedResponse():
+                                            # TODO: something here ig
 
                         current_status = RunnerReady()
                         logger.info("runner ready")
